@@ -17,6 +17,7 @@ talk() ->
     #{
         <<"slug">> => <<"talk">>,
         <<"title">> => <<"Talk">>,
+        <<"youtube_id">> => <<"abc123">>,
         <<"speaker_slug">> => <<"diana-pham">>,
         <<"year">> => <<"2026">>,
         <<"languages">> => <<"{php}">>,
@@ -136,6 +137,19 @@ year_speakers_test() ->
     Sqls = get(sqls),
     ?assert(lists:any(fun(S) -> has(S, <<"v1_talks">>) end, Sqls)),
     ?assertNot(lists:any(fun(S) -> has(S, <<"v1_year_speakers">>) end, Sqls)).
+
+speaker_year_detail_test() ->
+    {200, Body} = carolina_handler:handle_get(
+        <<"/v1/speakers/2026/diana-pham">>, <<>>, fun fake/2
+    ),
+    {ok, Dec} = thoas:decode(Body),
+    Data = maps:get(<<"data">>, Dec),
+    Talks = maps:get(<<"talks">>, Data),
+    ?assert(is_list(Talks)),
+    ?assert(Talks =/= []),
+    First = hd(Talks),
+    ?assertEqual(<<"Talk">>, maps:get(<<"title">>, First)),
+    ?assertEqual(<<"abc123">>, maps:get(<<"youtube_id">>, First)).
 
 year_sponsors_test() ->
     {200, Body} = carolina_handler:handle_get(<<"/v1/sponsors">>, <<"2026">>, fun fake/2),

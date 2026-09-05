@@ -152,6 +152,7 @@ merge_year_speaker(Sp, Talks, Year) ->
     Mine = [T || T <- Talks, maps:get(<<"speaker_slug">>, T, <<>>) =:= Slug],
     Sp#{
         <<"year">> => carolina_json:as_int(Year),
+        <<"talks">> => Mine,
         <<"languages">> => carolina_json:tags(Mine, <<"languages">>),
         <<"topics">> => carolina_json:tags(Mine, <<"topics">>)
     }.
