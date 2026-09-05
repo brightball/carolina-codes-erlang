@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Launch the Erlang + Cowboy polyglot API.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if ! command -v erl >/dev/null 2>&1; then
+  ERL_ROOT="${ERL_ROOT:-$HOME/.local/share/mise/installs/erlang/latest}"
+  export PATH="$ERL_ROOT/bin:${HOME}/.local/bin:${PATH}"
+fi
+export PATH="${HOME}/.local/bin:${PATH}"
+cd "$ROOT"
+if [[ ! -d "$ROOT/_build/default/lib/carolina/ebin" ]]; then
+  rebar3 compile
+fi
+exec erl -pa "$ROOT"/_build/default/lib/*/ebin -noshell -s carolina main

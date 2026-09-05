@@ -1,0 +1,22 @@
+{application, carolina, [
+    {description, "Carolina Code Conference Erlang polyglot API"},
+    {vsn, "0.2.0"},
+    {modules, []},
+    {registered, []},
+    {mod, {carolina, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        asn1,
+        public_key,
+        ssl,
+        inets,
+        ranch,
+        cowlib,
+        cowboy,
+        epgsql,
+        thoas
+    ]},
+    {env, [{port, 4028}]}
+]}.
