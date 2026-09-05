@@ -21,11 +21,8 @@ post(Url, Token) ->
         {"authorization", "Bearer " ++ Token},
         {"content-type", "application/json"}
     ],
-    HTTPOpts = [
-        {timeout, 8000},
-        {connect_timeout, 8000},
-        {ipfamily, inet6}
-    ],
+    _ = httpc:set_options([{ipfamily, inet6}]),
+    HTTPOpts = [{timeout, 8000}, {connect_timeout, 8000}],
     case httpc:request(
         post,
         {Target, Headers, "application/json", Body},
