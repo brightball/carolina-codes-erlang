@@ -24,7 +24,7 @@ post(Url, Token) ->
     HTTPOpts = [
         {timeout, 8000},
         {connect_timeout, 8000},
-        {ipfamily, inet6fb4}
+        {ipfamily, inet6}
     ],
     case httpc:request(
         post,
