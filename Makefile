@@ -2,7 +2,7 @@ ERL_ROOT ?= $(HOME)/.local/share/mise/installs/erlang/latest
 REBAR ?= $(HOME)/.local/bin/rebar3
 export PATH := $(ERL_ROOT)/bin:$(HOME)/.local/bin:$(PATH)
 
-.PHONY: compile test eunit run dialyzer sast audit lint
+.PHONY: compile test eunit run dialyzer sast audit lint check hooks
 
 compile:
 	$(REBAR) compile
@@ -24,6 +24,12 @@ audit:
 
 lint:
 	$(REBAR) lint
+
+check: dialyzer eunit sast audit lint
+
+hooks:
+	pre-commit install
+	git config core.hooksPath .githooks
 
 run: compile
 	erl -pa $(CURDIR)/_build/default/lib/*/ebin -config $(CURDIR)/config/sys -noshell -s carolina main

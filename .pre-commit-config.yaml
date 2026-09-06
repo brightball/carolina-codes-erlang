@@ -1,0 +1,35 @@
+# Local pre-commit hooks. Emergency escape: SKIP=dialyzer,local-tests,sast,audit,elvis git commit
+# Install once: make hooks   (or: pre-commit install)
+repos:
+  - repo: local
+    hooks:
+      - id: dialyzer
+        name: dialyzer
+        language: system
+        entry: make dialyzer
+        pass_filenames: false
+        always_run: true
+      - id: local-tests
+        name: local tests
+        language: system
+        entry: make test
+        pass_filenames: false
+        always_run: true
+      - id: sast
+        name: static security scanner
+        language: system
+        entry: make sast
+        pass_filenames: false
+        always_run: true
+      - id: audit
+        name: 3rd-party dependency scanner
+        language: system
+        entry: make audit
+        pass_filenames: false
+        always_run: true
+      - id: elvis
+        name: elvis
+        language: system
+        entry: make lint
+        pass_filenames: false
+        always_run: true

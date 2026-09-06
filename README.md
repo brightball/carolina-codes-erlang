@@ -5,12 +5,16 @@ Read-only v1 polyglot API for Carolina Code Conference. **Erlang/OTP** with **No
 `carolina_handler:handle_get/3` is the shipped router. Nova controllers parse path bindings and `year` query, call that unit, and return `{json, Map}` / `{json, Status, Headers, Map}`. Tests call those functions with a fake catalog — they do not reimplement routing. Live SQL uses epgsql against PostgreSQL `v1_*` views.
 
 ```bash
-make test
+make test        # local eunit
 make dialyzer
-make sast
-make audit
-make lint
+make sast        # PEST static security scan of src/
+make audit       # Hex/GitHub advisory scan of locked deps
+make lint        # Elvis
+make check       # all of the above
+make hooks       # install local pre-commit hooks
 ```
+
+Pre-commit runs the same five checks (`dialyzer`, `local tests`, `static security scanner`, `3rd-party dependency scanner`, `elvis`). Install once with `make hooks` (needs `pre-commit` on PATH). Emergency skip: `SKIP=dialyzer,local-tests,sast,audit,elvis git commit`.
 
 ```bash
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/carolina_dev \
