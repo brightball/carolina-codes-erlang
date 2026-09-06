@@ -5,7 +5,7 @@
 -spec main() -> no_return().
 main() ->
     {ok, _} = application:ensure_all_started(carolina),
-    io:format("carolina-codes-erlang listening on [::]:~p~n", [port()]),
+    logger:notice("carolina-codes-erlang listening on [::]:~p", [port()]),
     wait_forever().
 
 -spec start(application:start_type(), term()) -> {ok, pid()}.

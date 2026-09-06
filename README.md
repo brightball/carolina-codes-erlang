@@ -9,6 +9,7 @@ make test
 make dialyzer
 make sast
 make audit
+make lint
 ```
 
 ```bash

@@ -11,10 +11,14 @@ routes(_Environment) ->
             {"/health", fun carolina_main_controller:health/1, #{methods => [get]}},
             {"/v1/years", fun carolina_v1_controller:years/1, #{methods => [get]}},
             {"/v1/speakers", fun carolina_v1_controller:speakers/1, #{methods => [get]}},
-            {"/v1/speakers/:year/:slug", fun carolina_v1_controller:speaker_year/1, #{methods => [get]}},
+            {"/v1/speakers/:year/:slug",
+             fun carolina_v1_controller:speaker_year/1,
+             #{methods => [get]}},
             {"/v1/speakers/:slug", fun carolina_v1_controller:speaker/1, #{methods => [get]}},
             {"/v1/sponsors", fun carolina_v1_controller:sponsors/1, #{methods => [get]}},
-            {"/v1/sponsors/:year/:slug", fun carolina_v1_controller:sponsor_year/1, #{methods => [get]}},
+            {"/v1/sponsors/:year/:slug",
+             fun carolina_v1_controller:sponsor_year/1,
+             #{methods => [get]}},
             {"/v1/sponsors/:slug", fun carolina_v1_controller:sponsor/1, #{methods => [get]}}
         ]
     }].
