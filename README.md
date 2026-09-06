@@ -7,6 +7,7 @@ Read-only v1 polyglot API for Carolina Code Conference. **Erlang/OTP** with **No
 ```bash
 make test
 make dialyzer
+make sast
 ```
 
 ```bash
