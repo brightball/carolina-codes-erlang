@@ -2,12 +2,14 @@ ERL_ROOT ?= $(HOME)/.local/share/mise/installs/erlang/latest
 REBAR ?= $(HOME)/.local/bin/rebar3
 export PATH := $(ERL_ROOT)/bin:$(HOME)/.local/bin:$(PATH)
 
-.PHONY: compile test run dialyzer
+.PHONY: compile test eunit run dialyzer
 
 compile:
 	$(REBAR) compile
 
-test: compile
+test: eunit
+
+eunit: compile
 	$(REBAR) eunit
 
 dialyzer: compile
