@@ -1,8 +1,16 @@
 -module(carolina_identity).
--export([json/0, json_with_base/1, language/0, framework/0, language_version/0]).
+-export([
+    json/0,
+    json_with_base/1,
+    payload/0,
+    payload_with_base/1,
+    language/0,
+    framework/0,
+    language_version/0
+]).
 
 language() -> <<"Erlang">>.
-framework() -> <<"Cowboy">>.
+framework() -> <<"Nova">>.
 
 language_version() ->
     iolist_to_binary(["OTP ", erlang:system_info(otp_release)]).
@@ -20,8 +28,8 @@ endpoints() ->
         #{method => <<"GET">>, path => <<"/v1/sponsors/:year/:slug">>, query => []}
     ].
 
-json() ->
-    carolina_json:encode(#{
+payload() ->
+    #{
         language => language(),
         language_version => language_version(),
         api_version => <<"0.2.0">>,
@@ -29,16 +37,13 @@ json() ->
         created_year => 2026,
         schema_version => 1,
         endpoints => endpoints()
-    }).
+    }.
+
+payload_with_base(Base) ->
+    (payload())#{base_url => iolist_to_binary(Base)}.
+
+json() ->
+    carolina_json:encode(payload()).
 
 json_with_base(Base) ->
-    carolina_json:encode(#{
-        language => language(),
-        language_version => language_version(),
-        api_version => <<"0.2.0">>,
-        framework => framework(),
-        created_year => 2026,
-        schema_version => 1,
-        endpoints => endpoints(),
-        base_url => iolist_to_binary(Base)
-    }).
+    carolina_json:encode(payload_with_base(Base)).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the Erlang + Cowboy polyglot API.
+# Launch the Erlang + Nova polyglot API.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if ! command -v erl >/dev/null 2>&1; then
@@ -11,4 +11,8 @@ cd "$ROOT"
 if [[ ! -d "$ROOT/_build/default/lib/carolina/ebin" ]]; then
   rebar3 compile
 fi
-exec erl -pa "$ROOT"/_build/default/lib/*/ebin -noshell -s carolina main
+CONFIG=()
+if [[ -f "$ROOT/config/sys.config" ]]; then
+  CONFIG=(-config "$ROOT/config/sys")
+fi
+exec erl -pa "$ROOT"/_build/default/lib/*/ebin "${CONFIG[@]}" -noshell -s carolina main

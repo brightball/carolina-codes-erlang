@@ -1,5 +1,5 @@
 -module(carolina_register).
--export([once/0]).
+-export([once/0, uses_inet6/1, profile_options/1]).
 
 once() ->
     Url = os:getenv("CAROLINA_URL"),
@@ -21,13 +21,16 @@ post(Url, Token) ->
         {"authorization", "Bearer " ++ Token},
         {"content-type", "application/json"}
     ],
-    _ = httpc:set_options([{ipfamily, inet6}]),
+    Profile = carolina_httpc,
+    ok = ensure_profile(Profile),
+    ok = httpc:set_options(profile_options(Target), Profile),
     HTTPOpts = [{timeout, 8000}, {connect_timeout, 8000}],
     case httpc:request(
         post,
         {Target, Headers, "application/json", Body},
         HTTPOpts,
-        [{body_format, binary}]
+        [{body_format, binary}],
+        Profile
     ) of
         {ok, {{_, Code, Reason}, _, Resp}} ->
             io:format(standard_error, "registered with elixir: ~p ~s~n", [Code, Reason]),
@@ -36,6 +39,25 @@ post(Url, Token) ->
         {error, Reason} ->
             io:format(standard_error, "register: failed ~p~n", [Reason]),
             ok
+    end.
+
+%% inet6 only for Fly 6PN (*.internal:port). Never set the default httpc profile.
+uses_inet6(Url) when is_binary(Url) ->
+    uses_inet6(binary_to_list(Url));
+uses_inet6(Url) when is_list(Url) ->
+    string:find(Url, ".internal:") =/= nomatch.
+
+profile_options(Url) ->
+    case uses_inet6(Url) of
+        true -> [{ipfamily, inet6}];
+        false -> [{ipfamily, inet}]
+    end.
+
+ensure_profile(Profile) ->
+    case inets:start(httpc, [{profile, Profile}]) of
+        {ok, _} -> ok;
+        {error, {already_started, _}} -> ok;
+        {error, {already_started, _, _}} -> ok
     end.
 
 empty(false) -> true;

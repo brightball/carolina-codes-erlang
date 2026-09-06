@@ -1,6 +1,7 @@
 -module(carolina_handler).
 %% Shipped GET router. Tests call handle_get/3 with a fake catalog.
--export([handle_get/2, handle_get/3]).
+%% Controllers parse Req and return the Nova tuples this module produces.
+-export([handle_get/2, handle_get/3, year_qs/1, binding/2]).
 
 -define(SPEAKER_COLS,
     "slug, first_name, last_name, name, tagline, bio, company, location, "
@@ -24,20 +25,41 @@ handle_get(Path0, Year0, Catalog) ->
     Parts = split(Path),
     route(Path, Parts, Year, Catalog).
 
+year_qs(Req) when is_map(Req) ->
+    case maps:find(parsed_qs, Req) of
+        {ok, List} when is_list(List) ->
+            to_bin(proplists:get_value(<<"year">>, List, <<>>));
+        _ ->
+            try cowboy_req:parse_qs(Req) of
+                Qs -> to_bin(proplists:get_value(<<"year">>, Qs, <<>>))
+            catch
+                _:_ -> <<>>
+            end
+    end.
+
+binding(Req, Key) when is_map(Req), is_atom(Key) ->
+    Bindings = maps:get(bindings, Req, #{}),
+    KBin = atom_to_binary(Key, utf8),
+    V = case maps:get(Key, Bindings, undefined) of
+        undefined -> maps:get(KBin, Bindings, <<>>);
+        Other -> Other
+    end,
+    to_bin(V).
+
 route(<<"/health">>, _P, _Y, _C) ->
-    {200, carolina_json:encode(#{status => <<"ok">>})};
+    {json, #{status => <<"ok">>}};
 route(<<"/">>, _P, _Y, _C) ->
-    {200, carolina_identity:json()};
+    {json, carolina_identity:payload()};
 route(<<"/v1/years">>, _P, _Y, C) ->
     Rows = C(
         <<"SELECT year, slug, name, status FROM v1_years ORDER BY year DESC">>,
         []
     ),
-    {200, wrap(Rows)};
+    wrap(Rows);
 route(<<"/v1/speakers">>, _P, Year, C) ->
-    {200, wrap(list_speakers(Year, C))};
+    wrap(list_speakers(Year, C));
 route(<<"/v1/sponsors">>, _P, Year, C) ->
-    {200, wrap(list_sponsors(Year, C))};
+    wrap(list_sponsors(Year, C));
 route(_Path, [<<"v1">>, <<"speakers">>, Y, Slug], _Year, C) ->
     case is_year(Y) of
         true -> speaker_year(Y, Slug, C);
@@ -100,7 +122,7 @@ speaker_detail(Slug, C) ->
                   " FROM v1_talks WHERE speaker_slug = $1 ORDER BY year DESC">>,
                 [Slug]
             ),
-            {200, wrap(Sp#{<<"talks">> => Talks})}
+            wrap(Sp#{<<"talks">> => Talks})
     end.
 
 speaker_year(Year, Slug, C) ->
@@ -119,7 +141,7 @@ speaker_year(Year, Slug, C) ->
             ),
             case Talks of
                 [] -> not_found();
-                _ -> {200, wrap(merge_year_speaker(Sp, Talks, Year))}
+                _ -> wrap(merge_year_speaker(Sp, Talks, Year))
             end
     end.
 
@@ -134,7 +156,7 @@ sponsor_detail(Slug, C) ->
                 <<"SELECT * FROM v1_sponsorships WHERE sponsor_slug = $1">>,
                 [Slug]
             ),
-            {200, wrap(Sp#{<<"sponsorships">> => Sps})}
+            wrap(Sp#{<<"sponsorships">> => Sps})
     end.
 
 sponsor_year(Year, Slug, C) ->
@@ -144,7 +166,7 @@ sponsor_year(Year, Slug, C) ->
         [Year, Slug]
     ) of
         [] -> not_found();
-        [Sp | _] -> {200, wrap(Sp)}
+        [Sp | _] -> wrap(Sp)
     end.
 
 merge_year_speaker(Sp, Talks, Year) ->
@@ -158,12 +180,12 @@ merge_year_speaker(Sp, Talks, Year) ->
     }.
 
 wrap(Rows) when is_list(Rows) ->
-    carolina_json:encode(#{data => [carolina_json:row(R) || R <- Rows]});
+    {json, #{data => [carolina_json:row(R) || R <- Rows]}};
 wrap(Row) when is_map(Row) ->
-    carolina_json:encode(#{data => carolina_json:row(Row)}).
+    {json, #{data => carolina_json:row(Row)}}.
 
 not_found() ->
-    {404, carolina_json:encode(#{error => <<"not_found">>})}.
+    {json, 404, #{}, #{error => <<"not_found">>}}.
 
 normalize(<<>>) -> <<"/">>;
 normalize(<<"/">>) -> <<"/">>;

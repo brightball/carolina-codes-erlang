@@ -7,14 +7,12 @@
     {applications, [
         kernel,
         stdlib,
+        sasl,
         crypto,
         asn1,
         public_key,
         ssl,
         inets,
-        ranch,
-        cowlib,
-        cowboy,
         epgsql,
         thoas
     ]},

@@ -7,6 +7,8 @@ RUN curl -fsSL -o /usr/local/bin/rebar3 https://github.com/erlang/rebar3/release
  && chmod +x /usr/local/bin/rebar3
 COPY rebar.config rebar.lock ./
 COPY src ./src
+COPY config ./config
+COPY priv ./priv
 COPY bin ./bin
 RUN rebar3 compile && chmod +x bin/server
 ENV PORT=8080

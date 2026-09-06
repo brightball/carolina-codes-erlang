@@ -3,6 +3,7 @@
 
 -include_lib("epgsql/include/epgsql.hrl").
 
+-spec query(iodata(), [term()]) -> [map()].
 query(Sql, Args) ->
     Conn = conn(),
     SqlB = iolist_to_binary(Sql),
@@ -27,9 +28,8 @@ coerce_arg(B) when is_binary(B) ->
     end;
 coerce_arg(L) when is_list(L) -> coerce_arg(list_to_binary(L)).
 
-col_name(#column{name = Name}) when is_binary(Name) -> Name;
-col_name(#column{name = Name}) when is_atom(Name) -> atom_to_binary(Name, utf8);
-col_name(#column{name = Name}) when is_list(Name) -> list_to_binary(Name).
+col_name(#column{name = Name}) ->
+    Name.
 
 row_map(Names, Vals) ->
     maps:from_list(lists:zip(Names, [cell(V) || V <- Vals])).
