@@ -1,0 +1,14 @@
+{
+  "name": "carolina-codes-erlang",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "install": "make compile",
+  "ports": [
+    {
+      "name": "api",
+      "port": 4028
+    }
+  ]
+}
