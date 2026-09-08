@@ -1,5 +1,6 @@
 -module(carolina_catalog).
--export([query/2]).
+%% query/2 is live SQL. connect_map/1 is the map passed to epgsql:connect/1.
+-export([query/2, connect_map/0, connect_map/1]).
 
 -include_lib("epgsql/include/epgsql.hrl").
 
@@ -56,14 +57,31 @@ connect() ->
     persistent_term:put({?MODULE, conn}, C),
     C.
 
+-spec connect_map() -> map().
 connect_map() ->
     Dsn = case os:getenv("DATABASE_URL") of
         false -> "postgres://postgres:postgres@127.0.0.1:5432/carolina_dev";
         "" -> "postgres://postgres:postgres@127.0.0.1:5432/carolina_dev";
         S -> S
     end,
-    Parsed = parse_dsn(Dsn),
-    Parsed#{timeout => 5000, ssl => false}.
+    connect_map(Dsn).
+
+%% Options actually given to epgsql:connect/1. Fly .flycast/.internal
+%% hostnames are AAAA-only; without tcp_opts inet6, gen_tcp returns nxdomain.
+-spec connect_map(iodata()) -> map().
+connect_map(Dsn0) ->
+    Parsed = parse_dsn(Dsn0),
+    Host = maps:get(host, Parsed),
+    Opts = Parsed#{timeout => 5000},
+    case needs_inet6(Host) of
+        true -> Opts#{tcp_opts => [inet6]};
+        false -> Opts
+    end.
+
+needs_inet6(Host) when is_list(Host) ->
+    lists:suffix(".flycast", Host)
+        orelse lists:suffix(".internal", Host)
+        orelse lists:suffix(".fly.io", Host).
 
 parse_dsn(Dsn0) ->
     Dsn = iolist_to_binary(Dsn0),
@@ -84,8 +102,33 @@ parse_dsn(Dsn0) ->
         port => Port,
         username => User,
         password => Pass,
-        database => Database
+        database => Database,
+        ssl => ssl_from_uri(URI)
     }.
+
+ssl_from_uri(URI) ->
+    ssl_from_query(maps:get(query, URI, undefined)).
+
+ssl_from_query(undefined) -> false;
+ssl_from_query(<<>>) -> false;
+ssl_from_query("") -> false;
+ssl_from_query(Query) ->
+    Pairs = uri_string:dissect_query(Query),
+    Mode = query_val(Pairs, "sslmode"),
+    ssl_mode(to_list(Mode)).
+
+query_val(Pairs, Key) ->
+    case proplists:get_value(Key, Pairs, undefined) of
+        undefined ->
+            proplists:get_value(list_to_binary(Key), Pairs, "disable");
+        V ->
+            V
+    end.
+
+ssl_mode("require") -> true;
+ssl_mode("verify-ca") -> true;
+ssl_mode("verify-full") -> true;
+ssl_mode(_) -> false.
 
 split_userinfo(undefined) -> {"postgres", "postgres"};
 split_userinfo(Info) ->
