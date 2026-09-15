@@ -64,6 +64,7 @@ gitea_jobs_are_parallel_and_call_make_test() ->
     ?assertEqual(true, has(Y, "make test")),
     ?assertEqual(true, has(Y, "make sast")),
     ?assertEqual(true, has(Y, "make audit")),
+    ?assertEqual(true, has(read("Makefile"), "env -u GITHUB_TOKEN")),
     ?assertEqual(true, has(Y, "make secrets")),
     ?assertEqual(true, has(Y, "make lint")),
     ?assertEqual(false, has(Y, "git init")),

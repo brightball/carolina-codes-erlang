@@ -22,8 +22,9 @@ dialyzer: compile
 sast:
 	$(CURDIR)/tools/pest/pest.erl -e -r src
 
+# Unset GITHUB_TOKEN so a Gitea job token is not sent to GitHub's advisory API.
 audit:
-	$(REBAR) audit
+	env -u GITHUB_TOKEN $(REBAR) audit
 
 lint:
 	$(REBAR) lint

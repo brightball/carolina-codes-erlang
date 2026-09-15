@@ -80,6 +80,8 @@ jobs:
           curl -fsSL -o /usr/local/bin/rebar3 https://github.com/erlang/rebar3/releases/download/3.25.1/rebar3
           chmod +x /usr/local/bin/rebar3
       - run: make audit
+        env:
+          GITHUB_TOKEN: ""
 
   gitleaks:
     runs-on: ubuntu-latest
