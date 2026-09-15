@@ -1,8 +1,11 @@
 ERL_ROOT ?= $(HOME)/.local/share/mise/installs/erlang/latest
-REBAR ?= $(HOME)/.local/bin/rebar3
-export PATH := $(ERL_ROOT)/bin:$(HOME)/.local/bin:$(PATH)
+GITLEAKS_HOME ?= $(HOME)/.local/share/mise/installs/gitleaks/8.30.1
+export PATH := $(ERL_ROOT)/bin:$(HOME)/.local/bin:$(GITLEAKS_HOME):/usr/local/bin:$(PATH)
 
-.PHONY: compile test eunit run dialyzer sast audit lint check hooks
+REBAR ?= rebar3
+GITLEAKS ?= gitleaks
+
+.PHONY: compile test eunit run dialyzer sast audit lint secrets check hooks
 
 compile:
 	$(REBAR) compile
@@ -25,7 +28,12 @@ audit:
 lint:
 	$(REBAR) lint
 
-check: dialyzer eunit sast audit lint
+# Git history (CI / --all-files) plus staged diff so a commit cannot sneak a secret.
+secrets:
+	$(GITLEAKS) detect --source . --verbose --redact
+	@if git diff --cached --quiet; then :; else $(GITLEAKS) git --pre-commit --staged --verbose --redact; fi
+
+check: dialyzer eunit sast audit secrets lint
 
 hooks:
 	pre-commit install
