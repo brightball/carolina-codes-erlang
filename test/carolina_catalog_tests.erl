@@ -156,21 +156,56 @@ live_query_reconnect_test_() ->
         false -> []
     end.
 
+%% epgsql links the caller. A refused connect exits that process and
+%% cancels the rest of the eunit suite, so the probe runs unlinked.
 catalog_available() ->
-    _ = application:ensure_all_started(epgsql),
-    try epgsql:connect(carolina_catalog:connect_map()) of
-        {ok, C} ->
-            Result = epgsql:equery(C, "SELECT year FROM v1_years LIMIT 1", []),
-            _ = epgsql:close(C),
-            case Result of
-                {ok, _, [_ | _]} -> true;
-                _ -> false
-            end;
-        _ ->
-            false
-    catch
-        _:_ -> false
+    Parent = self(),
+    Ref = make_ref(),
+    spawn(fun() ->
+        process_flag(trap_exit, true),
+        Parent ! {Ref, catalog_probe()}
+    end),
+    receive
+        {Ref, true} -> true;
+        {Ref, _} -> false
+    after 8000 ->
+        false
     end.
+
+catalog_probe() ->
+    _ = application:ensure_all_started(epgsql),
+    Old = quiet_default_log(),
+    Result =
+        try epgsql:connect(carolina_catalog:connect_map()) of
+            {ok, C} ->
+                Query = epgsql:equery(C, "SELECT year FROM v1_years LIMIT 1", []),
+                _ = epgsql:close(C),
+                case Query of
+                    {ok, _, [_ | _]} -> true;
+                    _ -> false
+                end;
+            _ ->
+                false
+        catch
+            _:_ -> false
+        end,
+    restore_default_log(Old),
+    Result.
+
+quiet_default_log() ->
+    case logger:get_handler_config(default) of
+        {ok, #{level := Level}} ->
+            _ = logger:set_handler_config(default, level, none),
+            Level;
+        _ ->
+            undefined
+    end.
+
+restore_default_log(undefined) ->
+    ok;
+restore_default_log(Level) ->
+    _ = logger:set_handler_config(default, level, Level),
+    ok.
 
 live_query_reconnect() ->
     ok = carolina_catalog:cache_conn(undefined),
@@ -196,12 +231,11 @@ live_query_reconnect() ->
 %% epgsql logs a crash when the server closes the socket. The retry
 %% still succeeds; keep that report out of the test output.
 quiet_terminate(BackendPid) ->
-    {ok, #{level := Level}} = logger:get_handler_config(default),
-    ok = logger:set_handler_config(default, level, none),
+    Old = quiet_default_log(),
     try
         terminate_backend(BackendPid)
     after
-        ok = logger:set_handler_config(default, level, Level)
+        restore_default_log(Old)
     end.
 
 terminate_backend(BackendPid) ->
