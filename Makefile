@@ -5,15 +5,18 @@ export PATH := $(ERL_ROOT)/bin:$(HOME)/.local/bin:$(GITLEAKS_HOME):/usr/local/bi
 REBAR ?= rebar3
 GITLEAKS ?= gitleaks
 
-.PHONY: compile test eunit run dialyzer sast audit lint secrets check hooks
+.PHONY: compile test eunit run dialyzer sast audit lint secrets check hooks xref
 
 compile:
 	$(REBAR) compile
 
 test: eunit
 
-eunit: compile
+eunit: compile xref
 	$(REBAR) eunit
+
+xref: compile
+	$(REBAR) xref
 
 dialyzer: compile
 	$(REBAR) dialyzer
@@ -41,4 +44,4 @@ hooks:
 	git config core.hooksPath .githooks
 
 run: compile
-	erl -pa $(CURDIR)/_build/default/lib/*/ebin -config $(CURDIR)/config/sys -noshell -s carolina main
+	$(CURDIR)/bin/server

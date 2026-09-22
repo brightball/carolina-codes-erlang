@@ -1,22 +1,106 @@
 -module(carolina_catalog).
 %% query/2 is live SQL. connect_map/1 is the map passed to epgsql:connect/1.
--export([query/2, connect_map/0, connect_map/1]).
+%% query_with/4 is that same query with the socket calls injected so a
+%% dead cached connection can be forced without Postgres.
+-export([
+    query/2,
+    query_with/4,
+    cache_conn/1,
+    cached_conn/0,
+    connect_map/0,
+    connect_map/1
+]).
 
 -include_lib("epgsql/include/epgsql.hrl").
 
+-define(CONN_KEY, {?MODULE, conn}).
+%% One retry after a dead socket. Matches the connect timeout.
+-define(QUERY_TIMEOUT, 5000).
+
 -spec query(iodata(), [term()]) -> [map()].
 query(Sql, Args) ->
-    Conn = conn(),
+    query_with(Sql, Args, fun conn/0, fun bounded_equery/3).
+
+-spec query_with(
+    iodata(),
+    [term()],
+    fun(() -> pid()),
+    fun((pid(), binary(), [term()]) -> term())
+) -> [map()].
+query_with(Sql, Args, ConnFun, EqueryFun) ->
+    attempt(Sql, Args, ConnFun, EqueryFun, 1).
+
+attempt(Sql, Args, ConnFun, EqueryFun, Left) ->
+    Conn = ConnFun(),
     SqlB = iolist_to_binary(Sql),
     Params = [coerce_arg(A) || A <- Args],
-    case epgsql:equery(Conn, SqlB, Params) of
+    case safe_equery(EqueryFun, Conn, SqlB, Params) of
         {ok, Columns, Rows} ->
-            Names = [col_name(C) || C <- Columns],
-            [row_map(Names, tuple_to_list(R)) || R <- Rows];
+            rows_to_maps(Columns, Rows);
         {ok, _Count} ->
             [];
+        {ok, _Count, Columns, Rows} ->
+            rows_to_maps(Columns, Rows);
         {error, Reason} ->
+            finish_error(Sql, Args, ConnFun, EqueryFun, Left, Conn, Reason)
+    end.
+
+finish_error(Sql, Args, ConnFun, EqueryFun, Left, Conn, Reason) ->
+    case connection_failure(Reason) of
+        true ->
+            drop_conn(Conn),
+            case Left > 0 of
+                true ->
+                    attempt(Sql, Args, ConnFun, EqueryFun, Left - 1);
+                false ->
+                    error({catalog_query, Reason})
+            end;
+        false ->
             error({catalog_query, Reason})
+    end.
+
+%% SQL errors stay on the open connection. Socket loss, a fatal Postgres
+%% error, or a dead process do not.
+connection_failure(#error{severity = fatal}) -> true;
+connection_failure(#error{severity = panic}) -> true;
+connection_failure(#error{}) -> false;
+connection_failure(_) -> true.
+
+safe_equery(Fun, Conn, Sql, Params) ->
+    try Fun(Conn, Sql, Params) of
+        Result -> Result
+    catch
+        exit:Reason -> {error, {exit, Reason}}
+    end.
+
+rows_to_maps(Columns, Rows) ->
+    Names = [col_name(C) || C <- Columns],
+    [row_map(Names, tuple_to_list(R)) || R <- Rows].
+
+bounded_equery(Conn, Sql, Params) ->
+    Parent = self(),
+    Ref = make_ref(),
+    Worker = spawn(fun() ->
+        Result = try epgsql:equery(Conn, Sql, Params) of
+            Value -> Value
+        catch
+            exit:Reason -> {error, {exit, Reason}}
+        end,
+        Parent ! {Ref, Result}
+    end),
+    Mon = erlang:monitor(process, Conn),
+    receive
+        {Ref, Result} ->
+            _ = erlang:demonitor(Mon, [flush]),
+            Result;
+        {'DOWN', Mon, process, Conn, Reason} ->
+            exit(Worker, kill),
+            receive {Ref, _} -> ok after 0 -> ok end,
+            {error, {exit, Reason}}
+    after ?QUERY_TIMEOUT ->
+        _ = erlang:demonitor(Mon, [flush]),
+        exit(Worker, kill),
+        {error, timeout}
     end.
 
 %% v1 year columns are int8; epgsql will not encode <<"2026">> as int8.
@@ -42,7 +126,7 @@ cell({array, L}) -> L;
 cell(V) -> iolist_to_binary(io_lib:format("~p", [V])).
 
 conn() ->
-    case persistent_term:get({?MODULE, conn}, undefined) of
+    case cached_conn() of
         C when is_pid(C) ->
             case is_process_alive(C) of
                 true -> C;
@@ -54,8 +138,39 @@ conn() ->
 
 connect() ->
     {ok, C} = epgsql:connect(connect_map()),
-    persistent_term:put({?MODULE, conn}, C),
+    %% epgsql links the socket owner to the caller. A dead socket would
+    %% then kill the request before the retry can open a new connection.
+    true = unlink(C),
+    ok = cache_conn(C),
     C.
+
+-spec cached_conn() -> pid() | undefined.
+cached_conn() ->
+    persistent_term:get(?CONN_KEY, undefined).
+
+-spec cache_conn(pid() | undefined) -> ok.
+cache_conn(undefined) ->
+    _ = persistent_term:erase(?CONN_KEY),
+    ok;
+cache_conn(Pid) when is_pid(Pid) ->
+    persistent_term:put(?CONN_KEY, Pid),
+    ok.
+
+%% Forget a broken connection so the retry (and the next request) open
+%% a new socket. epgsql:close/1 can block forever on a dead fd.
+drop_conn(Conn) ->
+    case cached_conn() of
+        Conn -> ok = cache_conn(undefined);
+        _ -> ok
+    end,
+    abandon(Conn).
+
+abandon(Conn) when is_pid(Conn) ->
+    true = unlink(Conn),
+    exit(Conn, kill),
+    ok;
+abandon(_) ->
+    ok.
 
 -spec connect_map() -> map().
 connect_map() ->

@@ -32,9 +32,10 @@ speaker_year(Req) ->
     speaker_year(Req, fun carolina_catalog:query/2).
 
 speaker_year(Req, Catalog) ->
-    Year = carolina_handler:binding(Req, year),
-    Slug = carolina_handler:binding(Req, slug),
-    Path = iolist_to_binary([<<"/v1/speakers/">>, Year, <<"/">>, Slug]),
+    %% First segment is the year; :name is the speaker slug.
+    Year = carolina_handler:binding(Req, slug),
+    Name = carolina_handler:binding(Req, name),
+    Path = iolist_to_binary([<<"/v1/speakers/">>, Year, <<"/">>, Name]),
     carolina_handler:handle_get(Path, <<>>, Catalog).
 
 sponsors(Req) ->
@@ -54,7 +55,7 @@ sponsor_year(Req) ->
     sponsor_year(Req, fun carolina_catalog:query/2).
 
 sponsor_year(Req, Catalog) ->
-    Year = carolina_handler:binding(Req, year),
-    Slug = carolina_handler:binding(Req, slug),
-    Path = iolist_to_binary([<<"/v1/sponsors/">>, Year, <<"/">>, Slug]),
+    Year = carolina_handler:binding(Req, slug),
+    Name = carolina_handler:binding(Req, name),
+    Path = iolist_to_binary([<<"/v1/sponsors/">>, Year, <<"/">>, Name]),
     carolina_handler:handle_get(Path, <<>>, Catalog).

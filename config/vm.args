@@ -1,0 +1,12 @@
+# Fly shared-1cpu. Do not inherit the host CPU count.
++S 1:1
++SDcpu 1:1
++SDio 1:1
+# Do not busy-wait. Shared CPU credit and suspend need an idle VM.
++sbwt none
++sbwtdcpu none
++sbwtdio none
+# One async thread is enough for this API.
++A 1
+-noshell
+-noinput

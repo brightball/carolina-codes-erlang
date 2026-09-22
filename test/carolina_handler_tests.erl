@@ -1,4 +1,5 @@
 -module(carolina_handler_tests).
+-include_lib("nova/include/nova_router.hrl").
 %% Drive shipped carolina_handler:handle_get/3 and Nova controllers —
 %% not a reimplementation.
 -include_lib("eunit/include/eunit.hrl").
@@ -236,8 +237,8 @@ speaker_year_detail_test() ->
 
 speaker_year_controller_test() ->
     Req = req_bind(<<"/v1/speakers/2026/diana-pham">>, #{
-        <<"year">> => <<"2026">>,
-        <<"slug">> => <<"diana-pham">>
+        <<"slug">> => <<"2026">>,
+        <<"name">> => <<"diana-pham">>
     }),
     {json, Map} = carolina_v1_controller:speaker_year(Req, fun fake/2),
     Data = maps:get(data, Map),
@@ -287,8 +288,8 @@ sponsor_year_detail_test() ->
 
 sponsor_year_controller_test() ->
     Req = req_bind(<<"/v1/sponsors/2026/flywheel">>, #{
-        <<"year">> => <<"2026">>,
-        <<"slug">> => <<"flywheel">>
+        <<"slug">> => <<"2026">>,
+        <<"name">> => <<"flywheel">>
     }),
     {json, Map} = carolina_v1_controller:sponsor_year(Req, fun fake/2),
     ?assertEqual(<<"platinum">>, maps:get(<<"tier">>, maps:get(data, Map))).
@@ -316,9 +317,32 @@ router_paths_test() ->
             "/v1/years",
             "/v1/speakers",
             "/v1/speakers/:slug",
-            "/v1/speakers/:year/:slug",
+            "/v1/speakers/:slug/:name",
             "/v1/sponsors",
             "/v1/sponsors/:slug",
-            "/v1/sponsors/:year/:slug"
+            "/v1/sponsors/:slug/:name"
         ]
     ).
+
+%% The public URLs, through Nova's compiled dispatch. routing_tree does
+%% not backtrack across sibling bindings, so the router nests them.
+dispatch_matches_public_urls_test() ->
+    application:load(nova),
+    application:set_env(nova, environment, prod),
+    Dispatch = nova_router:compile([carolina]),
+    assert_route(Dispatch, <<"/v1/speakers/ada-lovelace">>,
+        fun carolina_v1_controller:speaker/1),
+    assert_route(Dispatch, <<"/v1/speakers/2026/ada-lovelace">>,
+        fun carolina_v1_controller:speaker_year/1),
+    assert_route(Dispatch, <<"/v1/sponsors/acme">>,
+        fun carolina_v1_controller:sponsor/1),
+    assert_route(Dispatch, <<"/v1/sponsors/2026/acme">>,
+        fun carolina_v1_controller:sponsor_year/1),
+    assert_route(Dispatch, <<"/v1/years">>, fun carolina_v1_controller:years/1),
+    assert_route(Dispatch, <<"/health">>, fun carolina_main_controller:health/1),
+    assert_route(Dispatch, <<"/">>, fun carolina_main_controller:index/1).
+
+assert_route(Dispatch, Path, Fun) ->
+    {ok, _Bindings, #nova_handler_value{callback = Callback}} =
+        routing_tree:lookup(<<"localhost">>, Path, <<"GET">>, Dispatch),
+    ?assertEqual(Fun, Callback).

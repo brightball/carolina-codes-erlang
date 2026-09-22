@@ -17,7 +17,7 @@ make hooks       # install local pre-commit hooks
 
 Pre-commit runs Dialyzer plus the five required checks (`local tests`, `static security scanner`, `3rd-party dependency scanner`, `gitleaks`, `elvis`). Install once with `make hooks` (needs `pre-commit` on PATH). Emergency skip: `SKIP=dialyzer,local-tests,sast,audit,gitleaks,elvis git commit`.
 
-Gitea Actions (`.gitea/workflows/ci.yml`) runs the same five checks as separate jobs with no `needs:` between them: `test`, `sast`, `audit`, `gitleaks`, `lint`.
+Gitea Actions (`.gitea/workflows/ci.yml`) prepares the environment once, then runs the same five checks as separate jobs that `needs:` only that prepare stage: `test`, `sast`, `audit`, `gitleaks`, `lint`. `make test` compiles with warnings as errors and runs xref (`undefined_function_calls`) before eunit. Dialyzer stays on `make dialyzer` / pre-commit and is not a Gitea job. The production image and the Gitea job image are both `erlang:27-slim`.
 
 ```bash
 DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/carolina_dev \
@@ -28,6 +28,8 @@ PORT=4028 \
 ./bin/server
 ```
 
-`GET /` reports `language: "Erlang"` and `framework: "Nova"`. `GET /health` returns `{"status":"ok"}` without touching Postgres. Listen port is **4028** locally and **8080** on Fly. The listener binds IPv6 dual-stack (`::`) so Fly 6PN can reach the process.
+`GET /` reports `language: "Erlang"` and `framework: "Nova"`. `GET /health` returns `{"status":"ok"}` without touching Postgres. Listen port is **4028** locally and **8080** on Fly (`PORT`). The listener binds IPv6 dual-stack (`::`, `ipv6_v6only` false) so Fly 6PN can reach the process.
 
-Local OTP is 29 via mise (`$HOME/.local/share/mise/installs/erlang/latest`). `bin/server` puts that prefix on `PATH` when `erl` is not already available. `rebar3` is `$HOME/.local/bin/rebar3`. `gitleaks` is mise `gitleaks@8.30.1`.
+`./bin/server` execs a prebuilt boot (`config/vm.args`: one scheduler, no busy-wait). It does not compile. Run `make compile` first when `_build/default/lib` is missing. The Fly image builds that boot in a builder stage and the final image has no rebar3. Idle machines suspend (`auto_stop_machines = "suspend"`, 256MB shared-1cpu, `min_machines_running = 0`). A failed catalog query drops the cached epgsql connection and retries once on a new socket.
+
+Local OTP is 29 via mise (`$HOME/.local/share/mise/installs/erlang/latest`). `bin/server` puts that prefix on `PATH` when `erl` is not already available. `rebar3` is `$HOME/.local/bin/rebar3`. `gitleaks` is mise `gitleaks@8.30.1`. Production and Gitea CI build with OTP 27.

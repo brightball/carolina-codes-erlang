@@ -1,18 +1,45 @@
 #!/usr/bin/env bash
-# Launch the Erlang + Nova polyglot API.
+# Production entry: exec a prebuilt boot. Does not compile.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
 if ! command -v erl >/dev/null 2>&1; then
   ERL_ROOT="${ERL_ROOT:-$HOME/.local/share/mise/installs/erlang/latest}"
-  export PATH="$ERL_ROOT/bin:${HOME}/.local/bin:${PATH}"
+  export PATH="$ERL_ROOT/bin:${PATH}"
 fi
-export PATH="${HOME}/.local/bin:${PATH}"
-cd "$ROOT"
-if [[ ! -d "$ROOT/_build/default/lib/carolina/ebin" ]]; then
-  rebar3 compile
+
+# A crash dump on a 256MB machine costs seconds and disk. Skip it.
+export ERL_CRASH_DUMP_SECONDS=0
+
+lib_root() {
+  if [[ -d "$ROOT/lib/carolina/ebin" ]]; then
+    printf '%s\n' "$ROOT/lib"
+    return
+  fi
+  if [[ -d "$ROOT/_build/prod/lib/carolina/ebin" ]]; then
+    printf '%s\n' "$ROOT/_build/prod/lib"
+    return
+  fi
+  if [[ -d "$ROOT/_build/default/lib/carolina/ebin" ]]; then
+    printf '%s\n' "$ROOT/_build/default/lib"
+    return
+  fi
+  echo "prebuilt boot missing under lib/ or _build/*/lib (run make compile)" >&2
+  exit 1
+}
+
+LIB="$(lib_root)"
+shopt -s nullglob
+PA=()
+for dir in "$LIB"/*/ebin; do
+  PA+=("-pa" "$dir")
+done
+if [[ ${#PA[@]} -eq 0 ]]; then
+  echo "prebuilt boot has no ebin directories" >&2
+  exit 1
 fi
-CONFIG=()
-if [[ -f "$ROOT/config/sys.config" ]]; then
-  CONFIG=(-config "$ROOT/config/sys")
-fi
-exec erl -pa "$ROOT"/_build/default/lib/*/ebin "${CONFIG[@]}" -noshell -s carolina main
+
+exec erl -args_file "$ROOT/config/vm.args" \
+  "${PA[@]}" \
+  -config "$ROOT/config/sys" \
+  -s carolina main

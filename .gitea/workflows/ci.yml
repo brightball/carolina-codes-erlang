@@ -1,9 +1,20 @@
-# One Gitea Actions job per quality check. Not a single combined job.
+# Prepare the Gitea CI environment once, then run each check against it.
 # Dialyzer stays local (pre-commit / make check); it is not a Gitea-required check.
 #
-# act_runner starts a new container per job. Empty images: clone GITHUB_SHA
-# with the job token over HTTPS. Gitea git HTTP returns 401 without the token.
-# Do not use the GitHub checkout action, initialize a new repository, or set init.defaultBranch.
+# act_runner starts a new container per job, so a live filesystem cannot be
+# shared. The prepare job clones GITHUB_SHA with the job token over HTTPS
+# (Gitea git HTTP returns 401 without the token), installs shared apt packages
+# plus rebar3/gitleaks, and uploads that tree via Gitea's artifact v3 API.
+# Check jobs need: prepare only (not each other), restore, and run one make
+# target. They do not re-run apt-get or re-download rebar3/gitleaks.
+#
+# erlang:27-slim has no Node, so actions/upload-artifact cannot run inside
+# the job image. v4 also treats Gitea as GHES and aborts. Restore fetches
+# tools/ci-env.sh with OTP httpc, then that helper downloads the artifact.
+# Gitea 1.24.7 rejects YAML anchors when splitting jobs (unknown anchor),
+# so restore is inlined in each check job.
+# Do not use the GitHub checkout action, initialize a new repository, or
+# set a default-branch git config.
 name: ci
 
 on:
@@ -18,14 +29,17 @@ env:
   GITHUB_TOKEN: ${{ github.token }}
 
 jobs:
-  test:
+  prepare:
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/erlang:27-slim
       env:
         GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - run: apt-get update -qq && apt-get install -y --no-install-recommends git make curl ca-certificates bash
+      - run: |
+          rm -f /etc/apt/apt.conf.d/docker-clean
+          apt-get update -qq
+          apt-get install -y --no-install-recommends git make curl ca-certificates bash
       - run: |
           token="${GITHUB_TOKEN:-${GITEA_TOKEN:-}}"
           if [ -z "$token" ]; then echo "missing job token for git fetch" >&2; exit 1; fi
@@ -35,93 +49,301 @@ jobs:
           git fetch --depth 1 origin "${GITHUB_SHA}"
           git checkout --force FETCH_HEAD
         shell: bash
-      - run: |
-          curl -fsSL -o /usr/local/bin/rebar3 https://github.com/erlang/rebar3/releases/download/3.25.1/rebar3
-          chmod +x /usr/local/bin/rebar3
-      - run: make test
+      - run: bash tools/ci-env.sh prepare
 
-  sast:
+  test:
+    needs: prepare
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/erlang:27-slim
       env:
         GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - run: apt-get update -qq && apt-get install -y --no-install-recommends git make curl ca-certificates bash
       - run: |
+          set -euo pipefail
           token="${GITHUB_TOKEN:-${GITEA_TOKEN:-}}"
-          if [ -z "$token" ]; then echo "missing job token for git fetch" >&2; exit 1; fi
-          host="${GITHUB_SERVER_URL#https://}"
-          host="${host#http://}"
-          git clone --depth 1 --no-checkout "https://x-access-token:${token}@${host}/${GITHUB_REPOSITORY}" .
-          git fetch --depth 1 origin "${GITHUB_SHA}"
-          git checkout --force FETCH_HEAD
+          if [ -z "$token" ]; then echo "missing job token" >&2; exit 1; fi
+          export CI_ENV_TOKEN="$token"
+          export CI_ENV_SERVER="${GITHUB_SERVER_URL}"
+          export CI_ENV_REPO="${GITHUB_REPOSITORY}"
+          export CI_ENV_SHA="${GITHUB_SHA}"
+          cat > /tmp/fetch-ci-env.escript <<'END'
+          #!/usr/bin/env escript
+          %% -*- erlang -*-
+          main(_) ->
+              {ok, _} = application:ensure_all_started(inets),
+              {ok, _} = application:ensure_all_started(ssl),
+              Token = os:getenv("CI_ENV_TOKEN"),
+              Server = string:trim(os:getenv("CI_ENV_SERVER"), trailing, "/"),
+              Repo = os:getenv("CI_ENV_REPO"),
+              Sha = os:getenv("CI_ENV_SHA"),
+              HttpOpts = [{ssl, [{verify, verify_none}]}],
+              Api = Server ++ "/api/v1/repos/" ++ Repo ++ "/raw/tools/ci-env.sh?ref=" ++ Sha,
+              Headers = [{"Authorization", "token " ++ Token}],
+              case httpc:request(get, {Api, Headers}, HttpOpts, [{body_format, binary}]) of
+                  {ok, {{_, 200, _}, _, Body}} ->
+                      ok = file:write_file("/tmp/ci-env.sh", Body),
+                      halt(0);
+                  _ ->
+                      Host = strip_scheme(Server),
+                      Scheme = scheme(Server),
+                      Raw = Scheme ++ "://x-access-token:" ++ Token ++ "@" ++ Host ++
+                          "/" ++ Repo ++ "/raw/commit/" ++ Sha ++ "/tools/ci-env.sh",
+                      case httpc:request(get, {Raw, []}, HttpOpts, [{body_format, binary}]) of
+                          {ok, {{_, 200, _}, _, Body2}} ->
+                              ok = file:write_file("/tmp/ci-env.sh", Body2),
+                              halt(0);
+                          Other ->
+                              io:format(standard_error, "fetch ci-env.sh failed: ~p~n", [Other]),
+                              halt(1)
+                      end
+              end.
+          strip_scheme("https://" ++ Rest) -> Rest;
+          strip_scheme("http://" ++ Rest) -> Rest;
+          strip_scheme(Rest) -> Rest.
+          scheme("http://" ++ _) -> "http";
+          scheme(_) -> "https".
+          END
+          escript /tmp/fetch-ci-env.escript
+          grep -q cmd_restore /tmp/ci-env.sh
+          bash /tmp/ci-env.sh restore
+        shell: bash
+      - run: make test
+
+  sast:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/library/erlang:27-slim
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - run: |
+          set -euo pipefail
+          token="${GITHUB_TOKEN:-${GITEA_TOKEN:-}}"
+          if [ -z "$token" ]; then echo "missing job token" >&2; exit 1; fi
+          export CI_ENV_TOKEN="$token"
+          export CI_ENV_SERVER="${GITHUB_SERVER_URL}"
+          export CI_ENV_REPO="${GITHUB_REPOSITORY}"
+          export CI_ENV_SHA="${GITHUB_SHA}"
+          cat > /tmp/fetch-ci-env.escript <<'END'
+          #!/usr/bin/env escript
+          %% -*- erlang -*-
+          main(_) ->
+              {ok, _} = application:ensure_all_started(inets),
+              {ok, _} = application:ensure_all_started(ssl),
+              Token = os:getenv("CI_ENV_TOKEN"),
+              Server = string:trim(os:getenv("CI_ENV_SERVER"), trailing, "/"),
+              Repo = os:getenv("CI_ENV_REPO"),
+              Sha = os:getenv("CI_ENV_SHA"),
+              HttpOpts = [{ssl, [{verify, verify_none}]}],
+              Api = Server ++ "/api/v1/repos/" ++ Repo ++ "/raw/tools/ci-env.sh?ref=" ++ Sha,
+              Headers = [{"Authorization", "token " ++ Token}],
+              case httpc:request(get, {Api, Headers}, HttpOpts, [{body_format, binary}]) of
+                  {ok, {{_, 200, _}, _, Body}} ->
+                      ok = file:write_file("/tmp/ci-env.sh", Body),
+                      halt(0);
+                  _ ->
+                      Host = strip_scheme(Server),
+                      Scheme = scheme(Server),
+                      Raw = Scheme ++ "://x-access-token:" ++ Token ++ "@" ++ Host ++
+                          "/" ++ Repo ++ "/raw/commit/" ++ Sha ++ "/tools/ci-env.sh",
+                      case httpc:request(get, {Raw, []}, HttpOpts, [{body_format, binary}]) of
+                          {ok, {{_, 200, _}, _, Body2}} ->
+                              ok = file:write_file("/tmp/ci-env.sh", Body2),
+                              halt(0);
+                          Other ->
+                              io:format(standard_error, "fetch ci-env.sh failed: ~p~n", [Other]),
+                              halt(1)
+                      end
+              end.
+          strip_scheme("https://" ++ Rest) -> Rest;
+          strip_scheme("http://" ++ Rest) -> Rest;
+          strip_scheme(Rest) -> Rest.
+          scheme("http://" ++ _) -> "http";
+          scheme(_) -> "https".
+          END
+          escript /tmp/fetch-ci-env.escript
+          grep -q cmd_restore /tmp/ci-env.sh
+          bash /tmp/ci-env.sh restore
         shell: bash
       - run: make sast
 
   audit:
+    needs: prepare
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/erlang:27-slim
       env:
         GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - run: apt-get update -qq && apt-get install -y --no-install-recommends git make curl ca-certificates bash
       - run: |
+          set -euo pipefail
           token="${GITHUB_TOKEN:-${GITEA_TOKEN:-}}"
-          if [ -z "$token" ]; then echo "missing job token for git fetch" >&2; exit 1; fi
-          host="${GITHUB_SERVER_URL#https://}"
-          host="${host#http://}"
-          git clone --depth 1 --no-checkout "https://x-access-token:${token}@${host}/${GITHUB_REPOSITORY}" .
-          git fetch --depth 1 origin "${GITHUB_SHA}"
-          git checkout --force FETCH_HEAD
+          if [ -z "$token" ]; then echo "missing job token" >&2; exit 1; fi
+          export CI_ENV_TOKEN="$token"
+          export CI_ENV_SERVER="${GITHUB_SERVER_URL}"
+          export CI_ENV_REPO="${GITHUB_REPOSITORY}"
+          export CI_ENV_SHA="${GITHUB_SHA}"
+          cat > /tmp/fetch-ci-env.escript <<'END'
+          #!/usr/bin/env escript
+          %% -*- erlang -*-
+          main(_) ->
+              {ok, _} = application:ensure_all_started(inets),
+              {ok, _} = application:ensure_all_started(ssl),
+              Token = os:getenv("CI_ENV_TOKEN"),
+              Server = string:trim(os:getenv("CI_ENV_SERVER"), trailing, "/"),
+              Repo = os:getenv("CI_ENV_REPO"),
+              Sha = os:getenv("CI_ENV_SHA"),
+              HttpOpts = [{ssl, [{verify, verify_none}]}],
+              Api = Server ++ "/api/v1/repos/" ++ Repo ++ "/raw/tools/ci-env.sh?ref=" ++ Sha,
+              Headers = [{"Authorization", "token " ++ Token}],
+              case httpc:request(get, {Api, Headers}, HttpOpts, [{body_format, binary}]) of
+                  {ok, {{_, 200, _}, _, Body}} ->
+                      ok = file:write_file("/tmp/ci-env.sh", Body),
+                      halt(0);
+                  _ ->
+                      Host = strip_scheme(Server),
+                      Scheme = scheme(Server),
+                      Raw = Scheme ++ "://x-access-token:" ++ Token ++ "@" ++ Host ++
+                          "/" ++ Repo ++ "/raw/commit/" ++ Sha ++ "/tools/ci-env.sh",
+                      case httpc:request(get, {Raw, []}, HttpOpts, [{body_format, binary}]) of
+                          {ok, {{_, 200, _}, _, Body2}} ->
+                              ok = file:write_file("/tmp/ci-env.sh", Body2),
+                              halt(0);
+                          Other ->
+                              io:format(standard_error, "fetch ci-env.sh failed: ~p~n", [Other]),
+                              halt(1)
+                      end
+              end.
+          strip_scheme("https://" ++ Rest) -> Rest;
+          strip_scheme("http://" ++ Rest) -> Rest;
+          strip_scheme(Rest) -> Rest.
+          scheme("http://" ++ _) -> "http";
+          scheme(_) -> "https".
+          END
+          escript /tmp/fetch-ci-env.escript
+          grep -q cmd_restore /tmp/ci-env.sh
+          bash /tmp/ci-env.sh restore
         shell: bash
-      - run: |
-          curl -fsSL -o /usr/local/bin/rebar3 https://github.com/erlang/rebar3/releases/download/3.25.1/rebar3
-          chmod +x /usr/local/bin/rebar3
       - run: make audit
         env:
           GITHUB_TOKEN: ""
 
   gitleaks:
-    runs-on: ubuntu-latest
-    container:
-      image: docker.io/library/debian:bookworm-slim
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-    steps:
-      - run: apt-get update -qq && apt-get install -y --no-install-recommends git make curl ca-certificates bash
-      - run: |
-          token="${GITHUB_TOKEN:-${GITEA_TOKEN:-}}"
-          if [ -z "$token" ]; then echo "missing job token for git fetch" >&2; exit 1; fi
-          host="${GITHUB_SERVER_URL#https://}"
-          host="${host#http://}"
-          git clone --depth 1 --no-checkout "https://x-access-token:${token}@${host}/${GITHUB_REPOSITORY}" .
-          git fetch --depth 1 origin "${GITHUB_SHA}"
-          git checkout --force FETCH_HEAD
-        shell: bash
-      - run: |
-          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz | tar -xz -C /usr/local/bin gitleaks
-      - run: make secrets
-
-  lint:
+    needs: prepare
     runs-on: ubuntu-latest
     container:
       image: docker.io/library/erlang:27-slim
       env:
         GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - run: apt-get update -qq && apt-get install -y --no-install-recommends git make curl ca-certificates bash
       - run: |
+          set -euo pipefail
           token="${GITHUB_TOKEN:-${GITEA_TOKEN:-}}"
-          if [ -z "$token" ]; then echo "missing job token for git fetch" >&2; exit 1; fi
-          host="${GITHUB_SERVER_URL#https://}"
-          host="${host#http://}"
-          git clone --depth 1 --no-checkout "https://x-access-token:${token}@${host}/${GITHUB_REPOSITORY}" .
-          git fetch --depth 1 origin "${GITHUB_SHA}"
-          git checkout --force FETCH_HEAD
+          if [ -z "$token" ]; then echo "missing job token" >&2; exit 1; fi
+          export CI_ENV_TOKEN="$token"
+          export CI_ENV_SERVER="${GITHUB_SERVER_URL}"
+          export CI_ENV_REPO="${GITHUB_REPOSITORY}"
+          export CI_ENV_SHA="${GITHUB_SHA}"
+          cat > /tmp/fetch-ci-env.escript <<'END'
+          #!/usr/bin/env escript
+          %% -*- erlang -*-
+          main(_) ->
+              {ok, _} = application:ensure_all_started(inets),
+              {ok, _} = application:ensure_all_started(ssl),
+              Token = os:getenv("CI_ENV_TOKEN"),
+              Server = string:trim(os:getenv("CI_ENV_SERVER"), trailing, "/"),
+              Repo = os:getenv("CI_ENV_REPO"),
+              Sha = os:getenv("CI_ENV_SHA"),
+              HttpOpts = [{ssl, [{verify, verify_none}]}],
+              Api = Server ++ "/api/v1/repos/" ++ Repo ++ "/raw/tools/ci-env.sh?ref=" ++ Sha,
+              Headers = [{"Authorization", "token " ++ Token}],
+              case httpc:request(get, {Api, Headers}, HttpOpts, [{body_format, binary}]) of
+                  {ok, {{_, 200, _}, _, Body}} ->
+                      ok = file:write_file("/tmp/ci-env.sh", Body),
+                      halt(0);
+                  _ ->
+                      Host = strip_scheme(Server),
+                      Scheme = scheme(Server),
+                      Raw = Scheme ++ "://x-access-token:" ++ Token ++ "@" ++ Host ++
+                          "/" ++ Repo ++ "/raw/commit/" ++ Sha ++ "/tools/ci-env.sh",
+                      case httpc:request(get, {Raw, []}, HttpOpts, [{body_format, binary}]) of
+                          {ok, {{_, 200, _}, _, Body2}} ->
+                              ok = file:write_file("/tmp/ci-env.sh", Body2),
+                              halt(0);
+                          Other ->
+                              io:format(standard_error, "fetch ci-env.sh failed: ~p~n", [Other]),
+                              halt(1)
+                      end
+              end.
+          strip_scheme("https://" ++ Rest) -> Rest;
+          strip_scheme("http://" ++ Rest) -> Rest;
+          strip_scheme(Rest) -> Rest.
+          scheme("http://" ++ _) -> "http";
+          scheme(_) -> "https".
+          END
+          escript /tmp/fetch-ci-env.escript
+          grep -q cmd_restore /tmp/ci-env.sh
+          bash /tmp/ci-env.sh restore
         shell: bash
+      - run: make secrets
+
+  lint:
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/library/erlang:27-slim
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+    steps:
       - run: |
-          curl -fsSL -o /usr/local/bin/rebar3 https://github.com/erlang/rebar3/releases/download/3.25.1/rebar3
-          chmod +x /usr/local/bin/rebar3
+          set -euo pipefail
+          token="${GITHUB_TOKEN:-${GITEA_TOKEN:-}}"
+          if [ -z "$token" ]; then echo "missing job token" >&2; exit 1; fi
+          export CI_ENV_TOKEN="$token"
+          export CI_ENV_SERVER="${GITHUB_SERVER_URL}"
+          export CI_ENV_REPO="${GITHUB_REPOSITORY}"
+          export CI_ENV_SHA="${GITHUB_SHA}"
+          cat > /tmp/fetch-ci-env.escript <<'END'
+          #!/usr/bin/env escript
+          %% -*- erlang -*-
+          main(_) ->
+              {ok, _} = application:ensure_all_started(inets),
+              {ok, _} = application:ensure_all_started(ssl),
+              Token = os:getenv("CI_ENV_TOKEN"),
+              Server = string:trim(os:getenv("CI_ENV_SERVER"), trailing, "/"),
+              Repo = os:getenv("CI_ENV_REPO"),
+              Sha = os:getenv("CI_ENV_SHA"),
+              HttpOpts = [{ssl, [{verify, verify_none}]}],
+              Api = Server ++ "/api/v1/repos/" ++ Repo ++ "/raw/tools/ci-env.sh?ref=" ++ Sha,
+              Headers = [{"Authorization", "token " ++ Token}],
+              case httpc:request(get, {Api, Headers}, HttpOpts, [{body_format, binary}]) of
+                  {ok, {{_, 200, _}, _, Body}} ->
+                      ok = file:write_file("/tmp/ci-env.sh", Body),
+                      halt(0);
+                  _ ->
+                      Host = strip_scheme(Server),
+                      Scheme = scheme(Server),
+                      Raw = Scheme ++ "://x-access-token:" ++ Token ++ "@" ++ Host ++
+                          "/" ++ Repo ++ "/raw/commit/" ++ Sha ++ "/tools/ci-env.sh",
+                      case httpc:request(get, {Raw, []}, HttpOpts, [{body_format, binary}]) of
+                          {ok, {{_, 200, _}, _, Body2}} ->
+                              ok = file:write_file("/tmp/ci-env.sh", Body2),
+                              halt(0);
+                          Other ->
+                              io:format(standard_error, "fetch ci-env.sh failed: ~p~n", [Other]),
+                              halt(1)
+                      end
+              end.
+          strip_scheme("https://" ++ Rest) -> Rest;
+          strip_scheme("http://" ++ Rest) -> Rest;
+          strip_scheme(Rest) -> Rest.
+          scheme("http://" ++ _) -> "http";
+          scheme(_) -> "https".
+          END
+          escript /tmp/fetch-ci-env.escript
+          grep -q cmd_restore /tmp/ci-env.sh
+          bash /tmp/ci-env.sh restore
+        shell: bash
       - run: make lint
