@@ -200,6 +200,55 @@ gitea_prepare_then_check_jobs_test() ->
     ?assertEqual(false, has(Y, "uses: actions/checkout")),
     ?assertEqual(false, maps:is_key(<<"dialyzer">>, Jobs)).
 
+%% README versions are whatever rebar.config and Dockerfile say.
+%% The digits are not hardcoded here.
+readme_pins_tree_versions_test() ->
+    {ok, Terms} = file:consult(filename:join(root(), "rebar.config")),
+    Deps = proplists:get_value(deps, Terms),
+    Readme = read("README.md"),
+    lists:foreach(
+        fun(Name) ->
+            Vsn = dep_vsn(Deps, Name),
+            ?assertEqual({Name, true}, {Name, has(Readme, atom_to_list(Name))}),
+            ?assertEqual({Name, Vsn, true}, {Name, Vsn, has(Readme, Vsn)})
+        end,
+        [nova, epgsql, thoas]
+    ),
+    Majors = erlang_image_majors(read("Dockerfile")),
+    Unique = lists:usort(Majors),
+    ?assertMatch([_], Unique),
+    [Major] = Unique,
+    ?assertEqual(true, has(Readme, ["erlang:", Major])),
+    ReadmeMajors = erlang_image_majors(Readme),
+    ?assertEqual(true, ReadmeMajors =/= []),
+    lists:foreach(
+        fun(Found) ->
+            ?assertEqual(Major, Found)
+        end,
+        ReadmeMajors
+    ),
+    Min = proplists:get_value(minimum_otp_vsn, Terms),
+    ?assertEqual(true, is_list(Min) andalso Min =/= ""),
+    ?assertEqual(true, has(Readme, "minimum_otp_vsn")),
+    ?assertEqual(true, has(Readme, Min)).
+
+dep_vsn(Deps, Name) ->
+    case lists:keyfind(Name, 1, Deps) of
+        {Name, Vsn} when is_list(Vsn) ->
+            case re:run(Vsn, "^[0-9]+\\.[0-9]+\\.[0-9]+$", [{capture, none}]) of
+                match -> Vsn;
+                nomatch -> erlang:error({bad_dep_vsn, Name, Vsn})
+            end;
+        Other ->
+            erlang:error({missing_dep, Name, Other})
+    end.
+
+erlang_image_majors(Bin) ->
+    case re:run(Bin, <<"erlang:([0-9]+)">>, [global, {capture, all, binary}]) of
+        {match, Matches} -> [Major || [_, Major] <- Matches];
+        nomatch -> []
+    end.
+
 gitea_rejects_yaml_anchors_test() ->
     ?assertEqual(true, has_yaml_anchor_or_alias(<<"  - *restore-prepared-env\n">>)),
     ?assertEqual(true, has_yaml_anchor_or_alias(<<"x-restore: &restore-prepared-env\n">>)),

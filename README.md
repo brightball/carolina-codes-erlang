@@ -1,6 +1,22 @@
 # carolina-codes-erlang
 
-Read-only v1 polyglot API for Carolina Code Conference. **Erlang/OTP** with **Nova** (Cowboy underneath) and **epgsql**.
+Read-only v1 polyglot API for Carolina Code Conference. **Erlang/OTP** with **Nova** (Cowboy underneath), **epgsql**, and **thoas**.
+
+## Versions
+
+The image and Gitea CI use `erlang:27-slim` (`Dockerfile`, `.gitea/workflows/ci.yml`). `rebar.config` sets `minimum_otp_vsn` to 26, which is lower than that image. Local development uses mise `erlang/latest` (OTP 29 on the maintainer machine). That local install can move without a commit. Do not treat the image major, `minimum_otp_vsn`, and the local OTP as one number.
+
+| Component | Version | Where |
+|---|---|---|
+| nova | 0.16.1 | `rebar.config` deps |
+| epgsql | 4.7.1 | `rebar.config` deps |
+| thoas | 1.2.1 | `rebar.config` deps |
+| rebar3 (image and CI) | 3.25.1 | `Dockerfile` |
+| rebar3_audit | 0.2.8 | `project_plugins` |
+| rebar3_lint | 6.0.0 | `project_plugins` |
+| gitleaks | 8.30.1 | `mise.toml` |
+
+Nova is the HTTP framework. epgsql reads PostgreSQL `v1_*` views. thoas encodes JSON. Cowboy is Nova's HTTP server and is not a direct dependency. `rebar3_audit` and `rebar3_lint` are build plugins, not runtime applications.
 
 `carolina_handler:handle_get/3` is the shipped router. Nova controllers parse path bindings and `year` query, call that unit, and return `{json, Map}` / `{json, Status, Headers, Map}`. Tests call those functions with a fake catalog — they do not reimplement routing. Live SQL uses epgsql against PostgreSQL `v1_*` views.
 
